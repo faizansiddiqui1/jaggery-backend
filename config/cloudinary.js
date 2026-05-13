@@ -30,11 +30,10 @@ export const uploadToCloudinary = async (fileBuffer, fileName, mimeType) => {
   const paramsToSign = { folder, public_id: publicId, timestamp };
   const signature = signParams(paramsToSign);
 
-  // Use base64 data URI to avoid multipart dependency
-  const dataUri = `data:${mimeType};base64,${fileBuffer.toString("base64")}`;
-
-  const body = new URLSearchParams();
-  body.append("file", dataUri);
+  // Use multipart upload to avoid base64 (large memory overhead for big images).
+  // Node's built-in `FormData`/`Blob` are available in modern runtimes.
+  const body = new FormData();
+  body.append("file", new Blob([fileBuffer], { type: mimeType }), fileName);
   body.append("api_key", apiKey);
   body.append("timestamp", timestamp.toString());
   body.append("signature", signature);
@@ -45,7 +44,6 @@ export const uploadToCloudinary = async (fileBuffer, fileName, mimeType) => {
     `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body,
     }
   );

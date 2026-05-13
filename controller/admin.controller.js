@@ -448,6 +448,11 @@ const parseWeightVariants = (value) => {
       originalPrice: v.originalPrice != null ? Number(v.originalPrice) : v.price != null ? Number(v.price) : 0,
       selling_price: v.selling_price != null ? Number(v.selling_price) : v.price != null ? Number(v.price) : 0,
       image: v.image || v.existingImage || undefined,
+      images: Array.isArray(v.images)
+        ? v.images.map((img) => String(img || "").trim()).filter(Boolean)
+        : (Array.isArray(v.existingImages)
+          ? v.existingImages.map((img) => String(img || "").trim()).filter(Boolean)
+          : []),
     }))
     .filter((v) => v.label);
 };
@@ -474,16 +479,32 @@ const applyWeightVariantsToDoc = (doc, wvs) => {
 };
 
 const syncProductImagesFromVariants = (doc, variants = []) => {
-  const variantImages = variants
-    .map((variant) => String(variant?.image || "").trim())
-    .filter(Boolean);
-  const variantImagePublicIds = variants
-    .map((variant) => String(variant?.imagePublicId || "").trim())
-    .filter(Boolean);
+  const variantImages = variants.flatMap((variant) => {
+    const images = Array.isArray(variant?.images) && variant.images.length
+      ? variant.images
+      : [variant?.image];
+    return images.map((img) => String(img || "").trim()).filter(Boolean);
+  });
+  const variantImagePublicIds = variants.flatMap((variant) => {
+    const publicIds = Array.isArray(variant?.imagePublicIds) && variant.imagePublicIds.length
+      ? variant.imagePublicIds
+      : [variant?.imagePublicId];
+    return publicIds.map((pid) => String(pid || "").trim()).filter(Boolean);
+  });
 
   if (variantImages.length) {
-    doc.product_image = variantImages;
-    doc.image_public_ids = variantImagePublicIds;
+    const uniqImages = [];
+    const uniqPublicIds = [];
+    for (let i = 0; i < variantImages.length; i++) {
+      const url = variantImages[i];
+      if (!url || uniqImages.includes(url)) continue;
+      uniqImages.push(url);
+      uniqPublicIds.push(variantImagePublicIds[i] || "");
+      if (uniqImages.length >= 4) break;
+    }
+
+    doc.product_image = uniqImages;
+    doc.image_public_ids = uniqPublicIds.filter(Boolean);
   }
 };
 
@@ -639,20 +660,37 @@ const uploadProduct = async (req, res) => {
       }
     }
 
-    // Upload per-variant images
-    let variantImageUrls = [];
-    if (variantImageFiles.length > 0) {
-      for (let i = 0; i < Math.min(variantImageFiles.length, weightVariants.length); i++) {
-        const file = variantImageFiles[i];
+    // Upload per-variant images (up to 4 per variant).
+    const variantImageIndexes = parseArrayField(
+      req.body.variantImageIndexes || req.body.variant_image_indexes
+    )
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value) && value >= 0);
+
+    if (variantImageFiles.length > 0 && weightVariants.length > 0) {
+      for (let fileIdx = 0; fileIdx < variantImageFiles.length; fileIdx++) {
+        const file = variantImageFiles[fileIdx];
+        const variantIdx = variantImageIndexes.length === variantImageFiles.length
+          ? variantImageIndexes[fileIdx]
+          : fileIdx;
+        const variant = weightVariants[variantIdx];
+        if (!file || !variant) continue;
+
+        if (!Array.isArray(variant.images)) variant.images = [];
+        if (!Array.isArray(variant.imagePublicIds)) variant.imagePublicIds = [];
+        if (variant.images.length >= 4) continue;
+
         const uploadRes = await uploadToCloudinary(
           file.buffer,
           `variant-${Date.now()}-${file.originalname}`,
           file.mimetype
         );
-        variantImageUrls.push(uploadRes.secure_url);
-        // Attach image to corresponding variant
-        weightVariants[i].image = uploadRes.secure_url;
-        weightVariants[i].imagePublicId = uploadRes.public_id;
+
+        variant.images.push(uploadRes.secure_url);
+        variant.imagePublicIds.push(uploadRes.public_id);
+
+        if (!variant.image) variant.image = uploadRes.secure_url;
+        if (!variant.imagePublicId) variant.imagePublicId = uploadRes.public_id;
       }
     }
 
@@ -1034,17 +1072,19 @@ const updateProduct = async (req, res) => {
       // Map uploaded files to concrete variant indexes.
       // Preferred: explicit indexes from frontend (variantImageIndexes).
       // Fallback: sequential mapping for older clients.
-      const uploadIndexByVariantIndex = new Map();
+      const uploadFileIndexesByVariantIndex = new Map();
       if (variantImageFiles.length > 0) {
         if (variantImageIndexes.length === variantImageFiles.length) {
           variantImageIndexes.forEach((variantIdx, fileIdx) => {
             if (variantIdx < weightVariants.length) {
-              uploadIndexByVariantIndex.set(variantIdx, fileIdx);
+              const list = uploadFileIndexesByVariantIndex.get(variantIdx) || [];
+              list.push(fileIdx);
+              uploadFileIndexesByVariantIndex.set(variantIdx, list);
             }
           });
         } else {
           for (let i = 0; i < Math.min(variantImageFiles.length, weightVariants.length); i += 1) {
-            uploadIndexByVariantIndex.set(i, i);
+            uploadFileIndexesByVariantIndex.set(i, [i]);
           }
         }
       }
@@ -1053,8 +1093,9 @@ const updateProduct = async (req, res) => {
       weightVariants.forEach((variant, variantIdx) => {
         const key = normalizeVariantField(variant?.label);
         const existing = existingVariantByLabel.get(key);
-        const hasReplacementUpload = uploadIndexByVariantIndex.has(variantIdx);
+        const hasReplacementUpload = uploadFileIndexesByVariantIndex.has(variantIdx);
         const payloadImage = String(variant?.image || "").trim();
+        const payloadImages = Array.isArray(variant?.images) ? variant.images.filter(Boolean) : [];
 
         if (!payloadImage && !hasReplacementUpload && existing?.image) {
           variant.image = existing.image;
@@ -1062,18 +1103,36 @@ const updateProduct = async (req, res) => {
         if (!variant?.imagePublicId && existing?.imagePublicId && variant?.image === existing?.image) {
           variant.imagePublicId = existing.imagePublicId;
         }
+
+        if (!payloadImages.length && !hasReplacementUpload && Array.isArray(existing?.images) && existing.images.length) {
+          variant.images = existing.images;
+          if (Array.isArray(existing?.imagePublicIds) && existing.imagePublicIds.length) {
+            variant.imagePublicIds = existing.imagePublicIds;
+          }
+        }
       });
 
-      for (const [variantIdx, fileIdx] of uploadIndexByVariantIndex.entries()) {
-        const file = variantImageFiles[fileIdx];
-        if (!file || !weightVariants[variantIdx]) continue;
-        const uploadRes = await uploadToCloudinary(
-          file.buffer,
-          `variant-${product.product_id}-${Date.now()}-${file.originalname}`,
-          file.mimetype
-        );
-        weightVariants[variantIdx].image = uploadRes.secure_url;
-        weightVariants[variantIdx].imagePublicId = uploadRes.public_id;
+      for (const [variantIdx, fileIndexes] of uploadFileIndexesByVariantIndex.entries()) {
+        const variant = weightVariants[variantIdx];
+        if (!variant) continue;
+        if (!Array.isArray(variant.images)) variant.images = [];
+        if (!Array.isArray(variant.imagePublicIds)) variant.imagePublicIds = [];
+
+        for (const fileIdx of fileIndexes) {
+          const file = variantImageFiles[fileIdx];
+          if (!file) continue;
+          if (variant.images.length >= 4) break;
+
+          const uploadRes = await uploadToCloudinary(
+            file.buffer,
+            `variant-${product.product_id}-${Date.now()}-${file.originalname}`,
+            file.mimetype
+          );
+          variant.images.push(uploadRes.secure_url);
+          variant.imagePublicIds.push(uploadRes.public_id);
+          if (!variant.image) variant.image = uploadRes.secure_url;
+          if (!variant.imagePublicId) variant.imagePublicId = uploadRes.public_id;
+        }
       }
 
       // Delete old Cloudinary assets that were removed/replaced.
@@ -1122,7 +1181,12 @@ const updateProduct = async (req, res) => {
     // validate media constraints based on target status
     const targetStatus = status || product.status || "draft";
     const variantImagesFromPayloadCount = Array.isArray(weightVariants) && weightVariants.length
-      ? weightVariants.filter((v) => v && v.image).length
+      ? weightVariants.reduce((sum, v) => {
+        if (!v) return sum;
+        const imagesCount = Array.isArray(v.images) ? v.images.filter(Boolean).length : 0;
+        if (imagesCount > 0) return sum + imagesCount;
+        return v.image ? sum + 1 : sum;
+      }, 0)
       : 0;
     const plannedImageCount = imageFiles.length > 0 || variantImageFiles.length > 0 || variantImagesFromPayloadCount > 0
       ? imageFiles.length + variantImageFiles.length + variantImagesFromPayloadCount
@@ -1695,7 +1759,12 @@ const updateDraft = async (req, res) => {
     }
 
     const variantImagesFromPayloadCount = Array.isArray(weightVariants) && weightVariants.length
-      ? weightVariants.filter((v) => v && v.image).length
+      ? weightVariants.reduce((sum, v) => {
+        if (!v) return sum;
+        const imagesCount = Array.isArray(v.images) ? v.images.filter(Boolean).length : 0;
+        if (imagesCount > 0) return sum + imagesCount;
+        return v.image ? sum + 1 : sum;
+      }, 0)
       : 0;
     const plannedImageCount = imageFiles.length > 0 || variantImageFiles.length > 0 || variantImagesFromPayloadCount > 0
       ? imageFiles.length + variantImageFiles.length + variantImagesFromPayloadCount

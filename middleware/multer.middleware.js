@@ -5,13 +5,13 @@ const storage = multer.memoryStorage();
 // Single upload for simple file fields
 export const upload = multer({
   storage: storage,
-  limits: { fileSize: 10 * 1024 * 1024 } // 10 MB
+  limits: { fileSize: 25 * 1024 * 1024 } // 25 MB
 });
 
 // Multiple fields upload for product with images and video
 export const uploadProductFiles = multer({
   storage: storage,
-  limits: { fileSize: 10 * 1024 * 1024 }
+  limits: { fileSize: 25 * 1024 * 1024 }
 }).fields([
   { name: 'images', maxCount: 10 },      // Product images
   { name: 'image', maxCount: 10 },       // Alternative field name

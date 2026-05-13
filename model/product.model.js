@@ -32,6 +32,8 @@ const VariantSchema = new mongoose.Schema(
     originalPrice: { type: Number },
     image: { type: String }, // single image per variant
     imagePublicId: { type: String },
+    images: { type: [String], default: [] }, // up to 4 images per variant
+    imagePublicIds: { type: [String], default: [] },
   },
   { _id: false }
 );

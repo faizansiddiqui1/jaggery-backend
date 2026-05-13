@@ -1,9 +1,18 @@
 import express from "express";
 import "./config/env.js"; // ensure .env is loaded
 import { connectDB } from "./config/db.js";
+import multer from "multer";
 
 const app = express();
 const port = Number(process.env.PORT) || 5000;
+
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled promise rejection:", reason);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err);
+});
 
 // CORS (without external dependency)
 const allowedOrigin = process.env.FRONTEND_URL || "*";
@@ -63,6 +72,30 @@ const startServer = async () => {
   } catch (error) {
     console.warn("Auth routes not loaded:", error.message);
   }
+
+  // Central error handler (important for multer/multipart uploads).
+  // Without this, some multipart failures can surface as connection resets to the proxy.
+  app.use((err, req, res, next) => {
+    if (err instanceof multer.MulterError || err?.name === "MulterError") {
+      const code = err.code || "MULTER_ERROR";
+      const isTooLarge = code === "LIMIT_FILE_SIZE";
+      return res.status(isTooLarge ? 413 : 400).json({
+        status: false,
+        message: isTooLarge ? "Uploaded file is too large." : "Upload failed.",
+        code,
+      });
+    }
+
+    if (err) {
+      console.error("Unhandled error:", err);
+      return res.status(500).json({
+        status: false,
+        message: "Server error",
+      });
+    }
+
+    next();
+  });
 
   app.listen(port, () => {
     console.log(`Server running on http://localhost:${port}`);
