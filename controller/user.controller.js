@@ -737,6 +737,15 @@ const appendStatusHistory = (order, status, updatedBy = "system", note = "") => 
   ];
 };
 
+const normalizePaymentMethod = (value) => {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "cod" || raw === "cash_on_delivery" || raw === "cash on delivery") return "COD";
+  if (raw === "razorpay") return "Razorpay";
+  return "Razorpay";
+};
+
+const isValidUpiId = (value) => /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/.test(String(value || "").trim());
+
 // --- Orders ---
 export const getUserOrders = async (req, res) => {
   try {
@@ -836,7 +845,8 @@ export const getUserOrders = async (req, res) => {
           };
         })
         : [];
-      return { ...order, amount, items };
+      const { refund_upi_id, ...safeOrder } = order;
+      return { ...safeOrder, amount, items };
     });
     return res.status(200).json({ status: true, orders: normalized });
   } catch (error) {
@@ -848,13 +858,8 @@ export const getUserOrders = async (req, res) => {
 // Razorpay order creation
 export const createOrder = async (req, res) => {
   try {
-    const keyId = process.env.RAZORPAY_KEY_ID;
-    const keySecret = process.env.RAZORPAY_KEY_SECRET;
-    if (!keyId || !keySecret) {
-      return res.status(500).json({ status: false, message: "Razorpay keys missing in env" });
-    }
-
-    const { items = [], address_id, email } = req.body || {};
+    const { items = [], address_id, email, payment_method } = req.body || {};
+    const resolvedPaymentMethod = normalizePaymentMethod(payment_method);
     const auth = await ensureActiveCustomer(email);
     if (!auth.ok) {
       return res.status(auth.code).json({ status: false, message: auth.message });
@@ -908,6 +913,67 @@ export const createOrder = async (req, res) => {
       return res.status(400).json({ status: false, message: "Unable to calculate order amount from items" });
     }
 
+    const addressDoc = address_id
+      ? await Addresses.findOne({ address_id: Number(address_id) })
+      : null;
+
+    if (resolvedPaymentMethod === "COD") {
+      const localOrderId = await generateUniqueOrderId();
+      const order = await Orders.create({
+        order_id: localOrderId,
+        order_code: localOrderId,
+        status: "confirmed",
+        payment_status: "pending",
+        payment_method: "COD",
+        amount: amountPaise,
+        currency: "INR",
+        items: orderItems,
+        address: addressDoc?._id,
+        user_email: auth.email || "",
+        FullName: addressDoc?.FullName || addressDoc?.full_name || "",
+        phone1: addressDoc?.phone1 || addressDoc?.phone || "",
+        phone2: addressDoc?.phone2 || addressDoc?.alt_phone || "",
+        address_line1: addressDoc?.address_line1 || addressDoc?.address || "",
+        city: addressDoc?.city || "",
+        state: addressDoc?.state || "",
+        country: addressDoc?.country || "",
+        pinCode: addressDoc?.pinCode || addressDoc?.postal_code || "",
+        addressType: addressDoc?.addressType || "",
+        status_history: [
+          { status: "confirmed", updatedAt: new Date(), updatedBy: "system", note: "COD order placed" },
+        ],
+      });
+
+      for (const item of order.items) {
+        const product = item.product ? await Products.findById(item.product) : await Products.findOne({ product_id: item.product_id });
+        if (!product) continue;
+        if (product.variants && product.variants.length > 0) {
+          for (const variant of product.variants) {
+            if (variant.label === item.size || variant.label?.toLowerCase() === String(item.size || "").toLowerCase()) {
+              variant.stock = Math.max(0, (variant.stock || 0) - item.quantity);
+            }
+          }
+        } else {
+          product.quantity = Math.max(0, (product.quantity || 0) - item.quantity);
+        }
+        await product.save();
+      }
+
+      return res.status(200).json({
+        status: true,
+        payment_method: "COD",
+        order_id: order.order_id,
+        local_order_id: order.order_id,
+        message: "Order placed successfully",
+      });
+    }
+
+    const keyId = process.env.RAZORPAY_KEY_ID;
+    const keySecret = process.env.RAZORPAY_KEY_SECRET;
+    if (!keyId || !keySecret) {
+      return res.status(500).json({ status: false, message: "Razorpay keys missing in env" });
+    }
+
     const payload = {
       amount: Math.round(amountPaise),
       currency: "INR",
@@ -943,6 +1009,7 @@ export const createOrder = async (req, res) => {
         address_id: address_id || null,
         email: auth.email || "",
       },
+      payment_method: "Razorpay",
     });
   } catch (error) {
     console.error("createOrder error:", error);
@@ -1224,7 +1291,7 @@ export const createNewAddress = async (req, res) => {
 // ---- Orders: cancel order ----
 export const cancelOrder = async (req, res) => {
   try {
-    const { order_id, id } = req.body || {};
+    const { order_id, id, reason, refund_upi_id } = req.body || {};
     const auth = await ensureActiveCustomer(req.body?.email);
     if (!auth.ok) {
       return res.status(auth.code).json({ status: false, message: auth.message });
@@ -1256,9 +1323,32 @@ export const cancelOrder = async (req, res) => {
       return res.status(400).json({ status: false, message: "Order can only be cancelled before shipping." });
     }
 
+    const cancelReason = String(reason || "").trim();
+    if (!cancelReason) {
+      return res.status(400).json({ status: false, message: "Cancellation reason is required." });
+    }
+
+    const paymentMethod = normalizePaymentMethod(order.payment_method);
+    const refundUpi = String(refund_upi_id || "").trim();
+    if (paymentMethod === "Razorpay" && !isValidUpiId(refundUpi)) {
+      return res.status(400).json({ status: false, message: "Valid UPI ID is required for refund." });
+    }
+
     order.status = "cancelled";
-    order.payment_status = order.payment_status === "paid" ? "refund_pending" : "cancelled";
-    appendStatusHistory(order, "cancelled", "user", "Cancelled by user");
+    order.cancel_reason = cancelReason;
+    order.refund_reason = cancelReason;
+    if (paymentMethod === "COD") {
+      order.payment_status = "cancelled";
+      order.refund_upi_id = "";
+      order.refund_request_type = "";
+      order.refund_requested_at = null;
+    } else {
+      order.payment_status = order.payment_status === "paid" ? "refund_pending" : "refund_pending";
+      order.refund_upi_id = refundUpi;
+      order.refund_request_type = "cancel";
+      order.refund_requested_at = new Date();
+    }
+    appendStatusHistory(order, "cancelled", "user", cancelReason);
     await order.save();
 
     return res.status(200).json({
@@ -1276,7 +1366,7 @@ export const cancelOrder = async (req, res) => {
 
 export const returnOrder = async (req, res) => {
   try {
-    const { order_id, id, reason } = req.body || {};
+    const { order_id, id, reason, refund_upi_id } = req.body || {};
     const auth = await ensureActiveCustomer(req.body?.email);
     if (!auth.ok) {
       return res.status(auth.code).json({ status: false, message: auth.message });
@@ -1302,11 +1392,23 @@ export const returnOrder = async (req, res) => {
       return res.status(400).json({ status: false, message: "Return window closed (5 days after delivery)." });
     }
 
-    order.status = "return";
-    if (String(order.payment_status || "").toLowerCase() === "paid") {
-      order.payment_status = "refund_pending";
+    const returnReason = String(reason || "").trim();
+    if (!returnReason) {
+      return res.status(400).json({ status: false, message: "Return reason is required." });
     }
-    appendStatusHistory(order, "return", "user", reason || "Requested by user");
+    const refundUpi = String(refund_upi_id || "").trim();
+    if (!isValidUpiId(refundUpi)) {
+      return res.status(400).json({ status: false, message: "Valid UPI ID is required for refund." });
+    }
+
+    order.status = "return";
+    order.return_reason = returnReason;
+    order.refund_reason = returnReason;
+    order.payment_status = "refund_pending";
+    order.refund_upi_id = refundUpi;
+    order.refund_request_type = "return";
+    order.refund_requested_at = new Date();
+    appendStatusHistory(order, "return", "user", returnReason);
     await order.save();
     return res.status(200).json({ status: true, message: "Return requested", order });
   } catch (error) {
