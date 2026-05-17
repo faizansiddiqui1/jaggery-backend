@@ -295,6 +295,90 @@ const mapCartItems = (items = []) =>
     title: String(item.title || "Product"),
     image: String(item.image || ""),
   }));
+const normalizeVariantKey = (value) => String(value || "").trim().toLowerCase();
+const resolveMatchedVariant = (product, size) => {
+  const variants = Array.isArray(product?.variants) ? product.variants : [];
+  if (!variants.length) return null;
+  const normalizedSize = normalizeVariantKey(size);
+  if (normalizedSize && normalizedSize !== "default") {
+    const exact = variants.find(
+      (variant) => normalizeVariantKey(variant?.label) === normalizedSize
+    );
+    if (exact) return exact;
+  }
+  if (variants.length === 1) return variants[0];
+  if (!normalizedSize || normalizedSize === "default") return variants[0];
+  return null;
+};
+const resolveAvailableStock = (product, size) => {
+  const matchedVariant = resolveMatchedVariant(product, size);
+  if (matchedVariant) {
+    return {
+      available: Math.max(0, Number(matchedVariant.stock || 0)),
+      variantLabel: String(matchedVariant.label || ""),
+      hasVariants: true,
+    };
+  }
+  if (Array.isArray(product?.variants) && product.variants.length > 0) {
+    return { available: 0, variantLabel: "", hasVariants: true };
+  }
+  return {
+    available: Math.max(0, Number(product?.quantity || 0)),
+    variantLabel: "",
+    hasVariants: false,
+  };
+};
+const validateRequestedStock = ({ product, size, requestedQty }) => {
+  const qty = Math.max(1, Number(requestedQty || 1));
+  const stockMeta = resolveAvailableStock(product, size);
+  if (stockMeta.available < qty) {
+    return {
+      ok: false,
+      message: stockMeta.hasVariants
+        ? "Selected variant is out of stock or insufficient stock."
+        : "Product is out of stock or insufficient stock.",
+      available: stockMeta.available,
+      variantLabel: stockMeta.variantLabel,
+    };
+  }
+  return { ok: true, available: stockMeta.available, variantLabel: stockMeta.variantLabel };
+};
+const validateCartItemsStock = async (items = []) => {
+  const normalized = Array.isArray(items) ? items : [];
+  if (!normalized.length) return { ok: true };
+  const uniqueIds = [...new Set(normalized.map((item) => Number(item?.product_id)).filter(Boolean))];
+  const products = await Products.find({ product_id: { $in: uniqueIds } }).lean();
+  const productMap = new Map(products.map((product) => [Number(product.product_id), product]));
+  const totalByKey = new Map();
+  for (const item of normalized) {
+    const pid = Number(item?.product_id);
+    if (!pid) continue;
+    const size = String(item?.size || "");
+    const key = `${pid}|${normalizeVariantKey(size)}`;
+    const qty = Math.max(1, Number(item?.qty ?? item?.quantity ?? 1));
+    totalByKey.set(key, (totalByKey.get(key) || 0) + qty);
+  }
+  for (const [key, qty] of totalByKey.entries()) {
+    const [pidRaw, sizeRaw = ""] = key.split("|");
+    const pid = Number(pidRaw);
+    const product = productMap.get(pid);
+    if (!product) {
+      return { ok: false, code: 404, message: `Product ${pid} not found.` };
+    }
+    const check = validateRequestedStock({ product, size: sizeRaw, requestedQty: qty });
+    if (!check.ok) {
+      return {
+        ok: false,
+        code: 400,
+        message: check.message,
+        product_id: pid,
+        size: check.variantLabel || sizeRaw,
+        available: check.available,
+      };
+    }
+  }
+  return { ok: true, productMap };
+};
 const cartResponse = (cart) => ({
   status: true,
   cart_id: cart?.cart_id || "",
@@ -356,7 +440,18 @@ export const saveUserCart = async (req, res) => {
       create: true,
     });
 
-    cart.items = mapCartItems(incomingItems);
+    const normalizedItems = mapCartItems(incomingItems);
+    const stockCheck = await validateCartItemsStock(normalizedItems);
+    if (!stockCheck.ok) {
+      return res.status(stockCheck.code || 400).json({
+        status: false,
+        message: stockCheck.message,
+        product_id: stockCheck.product_id,
+        size: stockCheck.size,
+        available: stockCheck.available,
+      });
+    }
+    cart.items = normalizedItems;
     if (email && !cart.email) cart.email = email;
     await cart.save();
 
@@ -378,6 +473,10 @@ export const addToCart = async (req, res) => {
     const color = normalizeVariant(req.body?.color);
     const size = normalizeVariant(req.body?.size);
     const qtyToAdd = toPositiveInt(req.body?.qty, 1);
+    const product = await Products.findOne({ product_id: pid }).lean();
+    if (!product) {
+      return res.status(404).json({ status: false, message: "Product not found" });
+    }
     const cart = await resolveCart({
       cartId: req.body?.cart_id,
       email,
@@ -385,6 +484,16 @@ export const addToCart = async (req, res) => {
     });
 
     const idx = cart.items.findIndex((item) => sameCartItem(item, pid, size, color));
+    const existingQty = idx >= 0 ? toPositiveInt(cart.items[idx].qty, 1) : 0;
+    const requestedQty = existingQty + qtyToAdd;
+    const stockCheck = validateRequestedStock({ product, size, requestedQty });
+    if (!stockCheck.ok) {
+      return res.status(400).json({
+        status: false,
+        message: stockCheck.message,
+        available: stockCheck.available,
+      });
+    }
     if (idx >= 0) {
       cart.items[idx].qty = toPositiveInt(cart.items[idx].qty, 1) + qtyToAdd;
       if (req.body?.price != null) cart.items[idx].price = toNonNegativeNumber(req.body.price, 0);
@@ -461,6 +570,18 @@ export const updateCartItem = async (req, res) => {
       if (qty <= 0) {
         cart.items.splice(idx, 1);
       } else {
+        const product = await Products.findOne({ product_id: pid }).lean();
+        if (!product) {
+          return res.status(404).json({ status: false, message: "Product not found" });
+        }
+        const stockCheck = validateRequestedStock({ product, size, requestedQty: qty });
+        if (!stockCheck.ok) {
+          return res.status(400).json({
+            status: false,
+            message: stockCheck.message,
+            available: stockCheck.available,
+          });
+        }
         cart.items[idx].qty = toPositiveInt(qty, 1);
       }
     }
@@ -872,6 +993,22 @@ export const createOrder = async (req, res) => {
     const ids = items.map((i) => Number(i.product_id)).filter(Boolean);
     const products = await Products.find({ product_id: { $in: ids } }).lean();
     const productMap = new Map(products.map((p) => [p.product_id, p]));
+    const stockCheck = await validateCartItemsStock(
+      items.map((item) => ({
+        product_id: item.product_id,
+        size: item.size || "",
+        qty: item.quantity || 1,
+      }))
+    );
+    if (!stockCheck.ok) {
+      return res.status(stockCheck.code || 400).json({
+        status: false,
+        message: stockCheck.message,
+        product_id: stockCheck.product_id,
+        size: stockCheck.size,
+        available: stockCheck.available,
+      });
+    }
 
     let amountPaise = 0;
     const orderItems = [];
@@ -1041,6 +1178,22 @@ export const confirmPayment = async (req, res) => {
       .digest("hex");
     if (generatedSignature !== razorpay_signature) {
       return res.status(400).json({ status: false, message: "Signature mismatch" });
+    }
+    const stockCheck = await validateCartItemsStock(
+      (Array.isArray(items) ? items : []).map((item) => ({
+        product_id: item.product_id,
+        size: item.size || "",
+        qty: item.quantity || 1,
+      }))
+    );
+    if (!stockCheck.ok) {
+      return res.status(stockCheck.code || 400).json({
+        status: false,
+        message: stockCheck.message,
+        product_id: stockCheck.product_id,
+        size: stockCheck.size,
+        available: stockCheck.available,
+      });
     }
 
     let order = await Orders.findOne({ razorpay_order_id });
