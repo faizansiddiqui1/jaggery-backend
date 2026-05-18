@@ -31,6 +31,8 @@ import {
   submitContactForm,
 } from "../controller/user.controller.js";
 import { upload } from "../middleware/multer.middleware.js";
+import { requireUserSession } from "../middleware/auth.middleware.js";
+import { paymentRateLimit } from "../middleware/rateLimit.middleware.js";
 
 const router = Router();
 
@@ -41,26 +43,26 @@ router.post("/search", searchProducts);
 router.get("/get-categories", getCategories);
 router.get("/get-product-reviews/:id", getProductReviews);
 router.post("/product-reviews", upload.single("reviewImage"), addProductReview);
-router.post("/wishlist/list", listWishlist);
-router.post("/wishlist/add", addToWishlistDb);
-router.post("/wishlist/remove", removeFromWishlistDb);
-router.post("/wishlist/clear", clearWishlistDb);
+router.post("/wishlist/list", requireUserSession, listWishlist);
+router.post("/wishlist/add", requireUserSession, addToWishlistDb);
+router.post("/wishlist/remove", requireUserSession, removeFromWishlistDb);
+router.post("/wishlist/clear", requireUserSession, clearWishlistDb);
 router.post("/get-user-cart", getUserCart);
 router.post("/save-cart", saveUserCart);
 router.post("/add-to-cart", addToCart);
 router.get("/remove-cart-by-product/:productId", removeCartByProduct);
 router.post("/update-cart-item", updateCartItem);
 router.post("/clear-cart", clearCart);
-router.post("/get-user-addresess", getUserAddresses);
-router.post("/create-newAddress", createNewAddress);
-router.patch("/update-user-address", updateUserAddress);
-router.post("/get-user-profile", getUserProfile);
-router.post("/update-user-profile", updateUserProfile);
-router.post("/get-orders", getUserOrders);
-router.post("/create-order", createOrder);
-router.post("/payment-success", confirmPayment);
-router.post("/cancel-order", cancelOrder);
-router.post("/return-order", returnOrder);
+router.post("/get-user-addresess", requireUserSession, getUserAddresses);
+router.post("/create-newAddress", requireUserSession, createNewAddress);
+router.patch("/update-user-address", requireUserSession, updateUserAddress);
+router.post("/get-user-profile", requireUserSession, getUserProfile);
+router.post("/update-user-profile", requireUserSession, updateUserProfile);
+router.post("/get-orders", requireUserSession, getUserOrders);
+router.post("/create-order", requireUserSession, paymentRateLimit, createOrder);
+router.post("/payment-success", requireUserSession, paymentRateLimit, confirmPayment);
+router.post("/cancel-order", requireUserSession, cancelOrder);
+router.post("/return-order", requireUserSession, returnOrder);
 router.post("/newsletter/subscribe", subscribeNewsletter);
 router.post("/contact/submit", submitContactForm);
 

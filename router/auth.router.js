@@ -1,10 +1,11 @@
 import { Router } from "express";
 import { sendOtp, verifyOtp } from "../controller/auth.controller.js";
+import { otpRateLimit, verifyOtpRateLimit } from "../middleware/rateLimit.middleware.js";
 
 const router = Router();
 
-router.post("/log", sendOtp);
-router.post("/varify-email", verifyOtp);
+router.post("/log", otpRateLimit, sendOtp);
+router.post("/varify-email", verifyOtpRateLimit, verifyOtp);
 
 // Admin auth placeholders
 router.post("/admin-reset", (req, res) => {

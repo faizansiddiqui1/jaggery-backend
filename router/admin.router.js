@@ -40,8 +40,17 @@ import {
   markContactSolved,
 } from "../controller/admin.controller.js";
 import { upload, uploadProductFiles } from '../middleware/multer.middleware.js';
+import { requireAdminAuth } from "../middleware/auth.middleware.js";
+import { adminLoginRateLimit } from "../middleware/rateLimit.middleware.js";
 
 const router = Router();
+
+router.post('/admin/login', adminLoginRateLimit, login);
+router.get('/admin/settings/public', getPublicSiteSettings);
+router.get('/admin/banners/public', getBannersPublic);
+router.get('/admin/testimonials/public', getTestimonialsPublic);
+
+router.use("/admin", requireAdminAuth);
 
 // Settings endpoint
 router.get('/admin/settings', getSiteSettings);
@@ -60,13 +69,10 @@ router.delete('/admin/reviews/:id', deleteReview);
 
 // Analytics overview endpoint
 router.get('/admin/analytics/overview', getAnalyticsOverview);
-router.get('/admin/banners/public', getBannersPublic);
 router.get('/admin/banners', getBannersAdmin);
 router.post('/admin/banners', upload.single('image'), createBanner);
 router.patch('/admin/banners/:id', upload.single('image'), updateBanner);
 router.delete('/admin/banners/:id', deleteBanner);
-
-router.get('/admin/testimonials/public', getTestimonialsPublic);
 router.get('/admin/testimonials', getTestimonialsAdmin);
 router.post('/admin/testimonials', createTestimonial);
 router.patch('/admin/testimonials/:id', updateTestimonial);
@@ -82,7 +88,6 @@ router.patch('/admin/update-catagory/:id', renameCategory);
 router.patch('/admin/update-category/:id', renameCategory);
 router.delete('/admin/delete-catagory/:id', deleteCategory);
 router.delete('/admin/delete-category/:id', deleteCategory);
-router.post('/admin/login', login)
 
 // Product routes with file upload support
 router.post('/admin/upload-product', uploadProductFiles, uploadProduct);
@@ -94,7 +99,6 @@ router.patch('/admin/update-order-status', updateOrderStatus);
 router.delete('/admin/delete-product', deleteProduct)
 
 // Added missing admin routes
-router.get('/admin/settings/public', getPublicSiteSettings);
 router.get('/admin/customers/overview', getCustomersOverview);
 router.get('/admin/customers/:email/activity', getCustomerActivity);
 router.patch('/admin/customers/:email/status', updateCustomerStatus);

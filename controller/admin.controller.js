@@ -39,6 +39,7 @@ import {
   notifyProductWaitlistForVariant,
   resetProductWaitlistForVariant,
 } from "../utils/productStockNotifications.js";
+import { createAdminToken } from "../middleware/auth.middleware.js";
 
 const createRandomAlphaNum = (length = 12) => {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -2190,8 +2191,7 @@ const login = (req, res) => {
   const checkUserName = process.env.ADMIN_USERNAME;
   const checkPassword = process.env.PASSWORD;
   if (checkUserName === userName && checkPassword === password) {
-    // Generate a simple token (in production, use JWT)
-    const token = Buffer.from(`${userName}:${Date.now()}`).toString('base64');
+    const token = createAdminToken(userName);
     return res.status(200).json({
       status: true,
       msg: "Login successfull",

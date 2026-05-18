@@ -614,7 +614,7 @@ export const clearCart = async (req, res) => {
 
 export const getUserProfile = async (req, res) => {
   try {
-    const auth = await ensureActiveCustomer(req.body?.email || "user@example.com");
+    const auth = await ensureActiveCustomer(req.user?.email || req.body?.email || "");
     if (!auth.ok) {
       return res.status(auth.code).json({ status: false, message: auth.message });
     }
@@ -637,19 +637,20 @@ export const getUserProfile = async (req, res) => {
 export const updateUserProfile = async (req, res) => {
   try {
     // Do not accept or store `age` from the client anymore
-    const { email = "user@example.com", name = "", phone = "", gender } = req.body || {};
-    const customerAccess = await ensureActiveCustomer(email);
-    if (!customerAccess.ok) {
-      return res.status(customerAccess.code).json({ status: false, message: customerAccess.message });
+    const { name = "", phone = "", gender } = req.body || {};
+    const email = String(req.user?.email || req.body?.email || "").trim().toLowerCase();
+    const access = await ensureActiveCustomer(email);
+    if (!access.ok) {
+      return res.status(access.code).json({ status: false, message: access.message });
     }
 
-    const update = { email: auth.email, name, phone };
+    const update = { email: access.email, name, phone };
     if (typeof gender === "string" && ["male", "female", "others"].includes(gender)) {
       update.gender = gender;
     }
 
     const profile = await Profile.findOneAndUpdate(
-      { email: auth.email },
+      { email: access.email },
       update,
       { new: true, upsert: true, setDefaultsOnInsert: true }
     ).lean();
@@ -668,7 +669,7 @@ export const updateUserProfile = async (req, res) => {
 
 // --- Wishlist helpers ---
 const requireEmail = (req, res) => {
-  const email = String(req.body?.email || "").trim().toLowerCase();
+  const email = String(req.user?.email || req.body?.email || "").trim().toLowerCase();
   if (!email) {
     res.status(401).json({ status: false, message: "Email required (auth)" });
     return null;
@@ -870,7 +871,7 @@ const isValidUpiId = (value) => /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/.test(S
 // --- Orders ---
 export const getUserOrders = async (req, res) => {
   try {
-    const email = String(req.body?.email || "").trim().toLowerCase();
+    const email = String(req.user?.email || req.body?.email || "").trim().toLowerCase();
     if (email) {
       const auth = await ensureActiveCustomer(email);
       if (!auth.ok) {
@@ -979,7 +980,8 @@ export const getUserOrders = async (req, res) => {
 // Razorpay order creation
 export const createOrder = async (req, res) => {
   try {
-    const { items = [], address_id, email, payment_method } = req.body || {};
+    const { items = [], address_id, payment_method } = req.body || {};
+    const email = String(req.user?.email || req.body?.email || "").trim().toLowerCase();
     const resolvedPaymentMethod = normalizePaymentMethod(payment_method);
     const auth = await ensureActiveCustomer(email);
     if (!auth.ok) {
@@ -1164,7 +1166,8 @@ export const confirmPayment = async (req, res) => {
       address_id,
       email = "",
     } = req.body || {};
-    const customerAccess = await ensureActiveCustomer(email);
+    const resolvedEmail = String(req.user?.email || email || "").trim().toLowerCase();
+    const customerAccess = await ensureActiveCustomer(resolvedEmail);
     if (!customerAccess.ok) {
       return res.status(customerAccess.code).json({ status: false, message: customerAccess.message });
     }
@@ -1300,7 +1303,7 @@ export const confirmPayment = async (req, res) => {
 
 export const updateUserAddress = async (req, res) => {
   try {
-    const auth = await ensureActiveCustomer(req.body?.email);
+    const auth = await ensureActiveCustomer(req.user?.email || req.body?.email);
     if (!auth.ok) {
       return res.status(auth.code).json({ status: false, message: auth.message });
     }

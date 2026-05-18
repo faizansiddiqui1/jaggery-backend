@@ -5,6 +5,7 @@ import multer from "multer";
 
 const app = express();
 const port = Number(process.env.PORT) || 5000;
+app.disable("x-powered-by");
 
 process.on("unhandledRejection", (reason) => {
   console.error("Unhandled promise rejection:", reason);
@@ -15,12 +16,26 @@ process.on("uncaughtException", (err) => {
 });
 
 // CORS (without external dependency)
-const allowedOrigin = process.env.FRONTEND_URL || "*";
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  ...(String(process.env.FRONTEND_URLS || "")
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean)),
+].filter(Boolean);
+const isOriginAllowed = (origin) => {
+  if (!origin) return true;
+  if (!allowedOrigins.length) return false;
+  return allowedOrigins.includes(origin);
+};
 app.use((req, res, next) => {
-  const originToSend =
-    allowedOrigin === "*" ? req.headers.origin || "*" : allowedOrigin;
-  res.header("Access-Control-Allow-Origin", originToSend);
+  const requestOrigin = String(req.headers.origin || "");
+  const originToSend = isOriginAllowed(requestOrigin) ? requestOrigin : "";
+  if (originToSend) {
+    res.header("Access-Control-Allow-Origin", originToSend);
+  }
   res.header("Access-Control-Allow-Credentials", "true");
+  res.header("Vary", "Origin");
   res.header(
     "Access-Control-Allow-Headers",
     "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-admin-token"
@@ -32,10 +47,15 @@ app.use((req, res, next) => {
   if (req.method === "OPTIONS") {
     return res.sendStatus(204);
   }
+  // baseline hardening headers for API responses
+  res.header("X-Content-Type-Options", "nosniff");
+  res.header("X-Frame-Options", "DENY");
+  res.header("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
   next();
 });
 
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 
 app.get("/health", (req, res) => {
   res.status(200).json({ status: true, message: "Backend is running" });
