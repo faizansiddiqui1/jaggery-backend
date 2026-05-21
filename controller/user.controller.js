@@ -866,6 +866,13 @@ const normalizePaymentMethod = (value) => {
   return "Razorpay";
 };
 
+const getCodChargeRupees = () => {
+  const raw = String(process.env.COD_CHARGE || "").trim();
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return parsed;
+};
+
 const isValidUpiId = (value) => /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/.test(String(value || "").trim());
 
 // --- Orders ---
@@ -1057,6 +1064,9 @@ export const createOrder = async (req, res) => {
       : null;
 
     if (resolvedPaymentMethod === "COD") {
+      const codChargeRupees = getCodChargeRupees();
+      const codChargePaise = Math.round(codChargeRupees * 100);
+      const totalAmountPaise = amountPaise + codChargePaise;
       const localOrderId = await generateUniqueOrderId();
       const order = await Orders.create({
         order_id: localOrderId,
@@ -1064,7 +1074,7 @@ export const createOrder = async (req, res) => {
         status: "confirmed",
         payment_status: "pending",
         payment_method: "COD",
-        amount: amountPaise,
+        amount: totalAmountPaise,
         currency: "INR",
         items: orderItems,
         address: addressDoc?._id,
