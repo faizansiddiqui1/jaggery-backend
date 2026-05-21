@@ -3402,9 +3402,9 @@ const topProducts = async (_req, res) => {
 };
 
 // ---------- Banner carousel ----------
-const validateBannerPayload = ({ imageUrl, targetUrl, title, subtitle, width, height }) => {
-  if (!imageUrl || !targetUrl || !title || !subtitle) {
-    return "Title, subtitle, image and target URL are required.";
+const validateBannerPayload = ({ imageUrl, targetUrl, width, height }) => {
+  if (!imageUrl || !targetUrl) {
+    return "Image and target URL are required.";
   }
   const w = Number(width || 0);
   const h = Number(height || 0);
@@ -3434,8 +3434,6 @@ const createBanner = async (req, res) => {
     const validationError = validateBannerPayload({
       imageUrl: resolvedImageUrl,
       targetUrl,
-      title,
-      subtitle,
       width,
       height,
     });
@@ -3444,8 +3442,8 @@ const createBanner = async (req, res) => {
     }
 
     const banner = await Banner.create({
-      title: title?.trim(),
-      subtitle: subtitle?.trim(),
+      title: title?.trim() || "",
+      subtitle: subtitle?.trim() || "",
       imageUrl: resolvedImageUrl.trim(),
       imagePublicId,
       targetUrl: targetUrl.trim(),
