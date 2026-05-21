@@ -2183,13 +2183,14 @@ const updateOrderStatus = async (req, res) => {
 };
 
 const login = (req, res) => {
-  const { userName, password } = req.body;
+  const userName = String(req.body?.userName || "").trim();
+  const password = String(req.body?.password || "");
   if (!userName || !password) {
     return res.status(400).json({ msg: "userName and Password required" });
   }
 
-  const checkUserName = process.env.ADMIN_USERNAME;
-  const checkPassword = process.env.PASSWORD;
+  const checkUserName = getEnvString("ADMIN_USERNAME");
+  const checkPassword = getEnvString("ADMIN_PASSWORD", "PASSWORD");
   if (checkUserName === userName && checkPassword === password) {
     const token = createAdminToken(userName);
     return res.status(200).json({
