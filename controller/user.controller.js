@@ -10,7 +10,7 @@ import Orders from "../model/orders.model.js";
 import Cart from "../model/cart.model.js";
 import NewsletterSubscriber from "../model/newsletterSubscriber.model.js";
 import ContactSubmission from "../model/contactSubmission.model.js";
-import { notifyOrderConfirmed, sendOrderReminderForOrderId } from "../services/waspWhatsApp.service.js";
+import { notifyOrderConfirmed, processOrderReminderJob } from "../services/waspWhatsApp.service.js";
 
 const parsePageLimit = (req) => {
   const page = Math.max(parseInt(req.query.page || "1", 10), 1);
@@ -1624,7 +1624,10 @@ export const sendOrderReminderFromQstash = async (req, res) => {
       return res.status(400).json({ status: false, message: "order_id required" });
     }
 
-    const result = await sendOrderReminderForOrderId(orderId);
+    const result = await processOrderReminderJob({
+      orderId,
+      remainingDelayDays: req.body?.remainingDelayDays,
+    });
     return res.status(200).json({ status: true, result });
   } catch (error) {
     console.error("sendOrderReminderFromQstash error:", error);

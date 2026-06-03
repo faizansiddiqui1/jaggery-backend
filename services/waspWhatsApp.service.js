@@ -4,7 +4,8 @@ import Profile from "../model/profile.model.js";
 const cleanEnv = (key) => String(process.env[key] || "").trim();
 
 const normalizeBaseUrl = (value) => String(value || "").trim().replace(/\/+$/, "");
-const REMINDER_DELAY = "28d";
+const DEFAULT_REMINDER_DELAY_DAYS = 28;
+const MAX_QSTASH_DELAY_DAYS = 7;
 const REMINDER_ENDPOINT_PATH = "/user/order-reminder/qstash";
 
 const formatOrderDate = (value) => {
@@ -185,14 +186,39 @@ export const sendWaspOrderReminder = async (order, options = {}) =>
     variables: buildOrderReminderVariables(order, options),
   });
 
+const findReminderOrder = async (orderId) => {
+  const id = String(orderId || "").trim();
+  if (!id) return null;
+  return Orders.findOne({ $or: [{ order_id: id }, { order_code: id }] });
+};
+
 export const sendOrderReminderForOrderId = async (orderId) => {
   const id = String(orderId || "").trim();
   if (!id) return { skipped: true, reason: "Order id missing" };
 
-  const order = await Orders.findOne({ $or: [{ order_id: id }, { order_code: id }] });
+  const order = await findReminderOrder(id);
   if (!order) return { skipped: true, reason: "Order not found" };
   if (!isReminderAllowedForOrder(order)) {
     return { skipped: true, reason: `Order status ${order.status} is not eligible` };
+  }
+
+  const profile = await getOrderNotificationProfile(order);
+  return sendWaspOrderReminder(order, profile);
+};
+
+export const processOrderReminderJob = async ({ orderId, remainingDelayDays = 0 }) => {
+  const id = String(orderId || "").trim();
+  if (!id) return { skipped: true, reason: "Order id missing" };
+
+  const order = await findReminderOrder(id);
+  if (!order) return { skipped: true, reason: "Order not found" };
+  if (!isReminderAllowedForOrder(order)) {
+    return { skipped: true, reason: `Order status ${order.status} is not eligible` };
+  }
+
+  const remaining = Math.max(0, Number(remainingDelayDays || 0));
+  if (remaining > 0) {
+    return scheduleOrderReminder(order, remaining);
   }
 
   const profile = await getOrderNotificationProfile(order);
@@ -205,7 +231,7 @@ const getQstashDestinationUrl = () => {
   return `${baseUrl.replace(/\/+$/, "")}${REMINDER_ENDPOINT_PATH}`;
 };
 
-export const scheduleOrderReminder = async (order) => {
+export const scheduleOrderReminder = async (order, delayDays = DEFAULT_REMINDER_DELAY_DAYS) => {
   const qstashToken = cleanEnv("QSTASH_TOKEN");
   const qstashUrl = normalizeBaseUrl(cleanEnv("QSTASH_URL") || "https://qstash.upstash.io");
   const webhookSecret = cleanEnv("ORDER_REMINDER_WEBHOOK_SECRET") || cleanEnv("QSTASH_CURRENT_SIGNING_KEY");
@@ -217,16 +243,23 @@ export const scheduleOrderReminder = async (order) => {
     return { skipped: true, reason: "Order id missing" };
   }
 
+  const requestedDelayDays = Math.max(0, Number(delayDays || 0));
+  const nextDelayDays = Math.min(requestedDelayDays || MAX_QSTASH_DELAY_DAYS, MAX_QSTASH_DELAY_DAYS);
+  const remainingDelayDays = Math.max(0, requestedDelayDays - nextDelayDays);
+
   const response = await fetch(`${qstashUrl}/v2/publish/${destinationUrl}`, {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${qstashToken}`,
       "Content-Type": "application/json",
-      "Upstash-Delay": REMINDER_DELAY,
+      "Upstash-Delay": `${nextDelayDays}d`,
       "Upstash-Forward-X-Order-Reminder-Secret": webhookSecret,
       "Upstash-Label": `order-reminder,${order.order_id}`,
     },
-    body: JSON.stringify({ order_id: order.order_id }),
+    body: JSON.stringify({
+      order_id: order.order_id,
+      remainingDelayDays,
+    }),
   });
 
   const responseText = await response.text();
