@@ -217,7 +217,7 @@ export const scheduleOrderReminder = async (order) => {
     return { skipped: true, reason: "Order id missing" };
   }
 
-  const response = await fetch(`${qstashUrl}/v2/publish/${encodeURIComponent(destinationUrl)}`, {
+  const response = await fetch(`${qstashUrl}/v2/publish/${destinationUrl}`, {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${qstashToken}`,
