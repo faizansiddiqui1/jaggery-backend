@@ -27,6 +27,7 @@ import {
   confirmPayment,
   cancelOrder,
   returnOrder,
+  sendOrderReminderFromQstash,
   subscribeNewsletter,
   submitContactForm,
 } from "../controller/user.controller.js";
@@ -63,6 +64,7 @@ router.post("/create-order", requireUserSession, paymentRateLimit, createOrder);
 router.post("/payment-success", requireUserSession, paymentRateLimit, confirmPayment);
 router.post("/cancel-order", requireUserSession, cancelOrder);
 router.post("/return-order", requireUserSession, returnOrder);
+router.post("/order-reminder/qstash", sendOrderReminderFromQstash);
 router.post("/newsletter/subscribe", subscribeNewsletter);
 router.post("/contact/submit", submitContactForm);
 

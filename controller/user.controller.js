@@ -10,6 +10,7 @@ import Orders from "../model/orders.model.js";
 import Cart from "../model/cart.model.js";
 import NewsletterSubscriber from "../model/newsletterSubscriber.model.js";
 import ContactSubmission from "../model/contactSubmission.model.js";
+import { notifyOrderConfirmed, sendOrderReminderForOrderId } from "../services/waspWhatsApp.service.js";
 
 const parsePageLimit = (req) => {
   const page = Math.max(parseInt(req.query.page || "1", 10), 1);
@@ -873,6 +874,20 @@ const getCodChargeRupees = () => {
   return parsed;
 };
 
+const getOrderNotificationProfile = async (order) => {
+  const hasName = Boolean(String(order?.FullName || "").trim());
+  const hasPhone = Boolean(String(order?.phone1 || order?.phone2 || "").trim());
+  if (hasName && hasPhone) return {};
+
+  const email = String(order?.user_email || "").trim().toLowerCase();
+  if (!email) return {};
+  const profile = await Profile.findOne({ email }).select("name phone").lean();
+  return {
+    profileName: String(profile?.name || "").trim(),
+    profilePhone: String(profile?.phone || "").trim(),
+  };
+};
+
 const isValidUpiId = (value) => /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/.test(String(value || "").trim());
 
 // --- Orders ---
@@ -1108,6 +1123,8 @@ export const createOrder = async (req, res) => {
         await product.save();
       }
 
+      notifyOrderConfirmed(order, await getOrderNotificationProfile(order));
+
       return res.status(200).json({
         status: true,
         payment_method: "COD",
@@ -1210,6 +1227,7 @@ export const confirmPayment = async (req, res) => {
     }
 
     let order = await Orders.findOne({ razorpay_order_id });
+    let shouldNotifyOrderConfirmed = false;
     if (!order) {
       const ids = Array.isArray(items) ? items.map((i) => Number(i.product_id)).filter(Boolean) : [];
       const products = await Products.find({ product_id: { $in: ids } }).lean();
@@ -1279,7 +1297,11 @@ export const confirmPayment = async (req, res) => {
           { status: "confirmed", updatedAt: new Date(), updatedBy: "system", note: "Payment verified" },
         ],
       });
+      shouldNotifyOrderConfirmed = true;
     } else {
+      shouldNotifyOrderConfirmed =
+        String(order.status || "").toLowerCase() !== "confirmed" ||
+        String(order.payment_status || "").toLowerCase() !== "paid";
       order.payment_status = "paid";
       order.status = "confirmed";
       order.razorpay_payment_id = razorpay_payment_id;
@@ -1302,6 +1324,10 @@ export const confirmPayment = async (req, res) => {
         product.quantity = Math.max(0, (product.quantity || 0) - item.quantity);
       }
       await product.save();
+    }
+
+    if (shouldNotifyOrderConfirmed) {
+      notifyOrderConfirmed(order, await getOrderNotificationProfile(order));
     }
 
     return res.status(200).json({ status: true, message: "Payment verified", order_id: order?.order_id });
@@ -1580,5 +1606,28 @@ export const returnOrder = async (req, res) => {
   } catch (error) {
     console.error("returnOrder error:", error);
     return res.status(500).json({ status: false, message: "Failed to request return" });
+  }
+};
+
+export const sendOrderReminderFromQstash = async (req, res) => {
+  try {
+    const expectedSecret = String(
+      process.env.ORDER_REMINDER_WEBHOOK_SECRET || process.env.QSTASH_CURRENT_SIGNING_KEY || ""
+    ).trim();
+    const receivedSecret = String(req.headers["x-order-reminder-secret"] || "").trim();
+    if (!expectedSecret || receivedSecret !== expectedSecret) {
+      return res.status(401).json({ status: false, message: "Unauthorized reminder request" });
+    }
+
+    const orderId = String(req.body?.order_id || req.body?.orderId || "").trim();
+    if (!orderId) {
+      return res.status(400).json({ status: false, message: "order_id required" });
+    }
+
+    const result = await sendOrderReminderForOrderId(orderId);
+    return res.status(200).json({ status: true, result });
+  } catch (error) {
+    console.error("sendOrderReminderFromQstash error:", error);
+    return res.status(500).json({ status: false, message: "Failed to send order reminder" });
   }
 };
