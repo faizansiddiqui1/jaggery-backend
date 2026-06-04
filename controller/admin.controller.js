@@ -741,6 +741,7 @@ const uploadProduct = async (req, res) => {
       sku,
       ingredients: ingredients ? JSON.parse(ingredients) : [],
       nutritions: nutritions ? JSON.parse(nutritions) : [],
+      cod_available: req.body.cod_available === "true" || req.body.cod_available === true,
       status,
       draft_stage: draft_stage || (status === "published" ? "complete" : "details"),
     });
@@ -945,9 +946,10 @@ const updateProduct = async (req, res) => {
       variants: rawVariants,
       ingredients,
       nutritions,
+      cod_available,
     } = req.body;
 
-    console.log('Update product request body:', { name, sku, ingredients, nutritions, rawVariants });
+    console.log('Update product request body:', { name, sku, ingredients, nutritions, rawVariants, cod_available });
     const weightVariants = parseWeightVariants(rawVariants || req.body.variants);
 
     const status = rawStatus ? rawStatus.toLowerCase() : undefined;
@@ -1346,6 +1348,9 @@ const updateProduct = async (req, res) => {
       targetDoc.key_highlights = highlightsArr;
       targetDoc.video_url = videoUrl;
       targetDoc.video_public_id = videoPublicId;
+      if (cod_available !== undefined) {
+        targetDoc.cod_available = cod_available === "true" || cod_available === true;
+      }
     };
 
     applyProductMutations(product);

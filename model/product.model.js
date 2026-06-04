@@ -55,6 +55,7 @@ const ProductSchema = new mongoose.Schema(
     ingredients: { type: [IngredientSchema], default: [] },
     nutritions: { type: [NutritionSchema], default: [] },
     variants: { type: [VariantSchema], default: [] },
+    cod_available: { type: Boolean, default: false },
     status: {
       type: String,
       enum: ["draft", "published", "unpublished", "cancelled"],

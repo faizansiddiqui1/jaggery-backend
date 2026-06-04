@@ -380,6 +380,29 @@ const validateCartItemsStock = async (items = []) => {
   }
   return { ok: true, productMap };
 };
+const validateCodAvailability = ({ productMap, items = [] }) => {
+  const normalized = Array.isArray(items) ? items : [];
+  const blockedNames = [];
+
+  for (const item of normalized) {
+    const pid = Number(item?.product_id);
+    if (!pid) continue;
+    const product = productMap?.get(pid);
+    if (!product || product.cod_available !== true) {
+      blockedNames.push(String(product?.name || product?.title || `Product ${pid}`));
+    }
+  }
+
+  if (blockedNames.length) {
+    return {
+      ok: false,
+      code: 400,
+      message: `COD is not available for ${blockedNames.slice(0, 2).join(", ")}${blockedNames.length > 2 ? " and more" : ""}.`,
+    };
+  }
+
+  return { ok: true };
+};
 const cartResponse = (cart) => ({
   status: true,
   cart_id: cart?.cart_id || "",
@@ -1032,6 +1055,12 @@ export const createOrder = async (req, res) => {
         size: stockCheck.size,
         available: stockCheck.available,
       });
+    }
+    if (resolvedPaymentMethod === "COD") {
+      const codCheck = validateCodAvailability({ productMap: stockCheck.productMap || productMap, items });
+      if (!codCheck.ok) {
+        return res.status(codCheck.code || 400).json({ status: false, message: codCheck.message });
+      }
     }
 
     let amountPaise = 0;
