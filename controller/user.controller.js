@@ -388,7 +388,7 @@ const validateCodAvailability = ({ productMap, items = [] }) => {
     const pid = Number(item?.product_id);
     if (!pid) continue;
     const product = productMap?.get(pid);
-    if (!product || product.cod_available !== true) {
+    if (!product || !(product.cod_available === true || product.cod_available === "true")) {
       blockedNames.push(String(product?.name || product?.title || `Product ${pid}`));
     }
   }

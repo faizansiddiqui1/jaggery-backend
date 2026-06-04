@@ -741,7 +741,7 @@ const uploadProduct = async (req, res) => {
       sku,
       ingredients: ingredients ? JSON.parse(ingredients) : [],
       nutritions: nutritions ? JSON.parse(nutritions) : [],
-      cod_available: req.body.cod_available === "true" || req.body.cod_available === true,
+      cod_available: parseBoolean(req.body.cod_available, false),
       status,
       draft_stage: draft_stage || (status === "published" ? "complete" : "details"),
     });
@@ -1349,7 +1349,7 @@ const updateProduct = async (req, res) => {
       targetDoc.video_url = videoUrl;
       targetDoc.video_public_id = videoPublicId;
       if (cod_available !== undefined) {
-        targetDoc.cod_available = cod_available === "true" || cod_available === true;
+        targetDoc.cod_available = parseBoolean(cod_available, false);
       }
     };
 
@@ -1414,6 +1414,16 @@ const updateProduct = async (req, res) => {
     };
 
     await persistWithRetry();
+
+    if (cod_available !== undefined) {
+      const codAvailableValue = parseBoolean(cod_available, false);
+      await Products.updateOne(
+        { product_id: Number(product_id) },
+        { $set: { cod_available: codAvailableValue } },
+        { strict: false }
+      );
+      product.cod_available = codAvailableValue;
+    }
 
     const currentQuantity = Number(product.quantity || 0);
     if (previousQuantity <= 0 && currentQuantity > 0) {
