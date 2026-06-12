@@ -2067,7 +2067,7 @@ const resolveOrderIdentifierQuery = (orderRef) => {
 const getOrders = async (_req, res) => {
   try {
     const data = await Orders.find({})
-      .populate({ path: "items.product", select: "name title product_code product_image price selling_price" })
+      .populate({ path: "items.product", select: "name title product_code product_image variants price selling_price" })
       .populate({ path: "address" })
       .sort({ createdAt: -1 });
 
@@ -2100,10 +2100,33 @@ const getOrders = async (_req, res) => {
       await order.save();
     }
 
+    const missingProductIds = Array.from(new Set(
+      data.flatMap((order) =>
+        (Array.isArray(order.items) ? order.items : [])
+          .filter((item) => !item?.product && Number(item?.product_id) > 0)
+          .map((item) => Number(item.product_id))
+      )
+    ));
+    const fallbackProducts = missingProductIds.length
+      ? await Products.find({ product_id: { $in: missingProductIds } })
+        .select("product_id name title product_code product_image variants price selling_price")
+        .lean()
+      : [];
+    const fallbackProductMap = new Map(
+      fallbackProducts.map((product) => [Number(product.product_id), product])
+    );
+
     const ordersWithDetails = data.map((orderDoc) => {
       const order = orderDoc.toObject();
+      const items = Array.isArray(order.items)
+        ? order.items.map((item) => ({
+          ...item,
+          product: item.product || fallbackProductMap.get(Number(item.product_id || 0)) || null,
+        }))
+        : [];
       return {
         ...order,
+        items,
         status: order.status || "pending",
         payment_method: order.payment_method || "Razorpay",
       };

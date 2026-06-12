@@ -913,6 +913,28 @@ const getOrderNotificationProfile = async (order) => {
 
 const isValidUpiId = (value) => /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/.test(String(value || "").trim());
 
+const collectProductImageCandidates = (...values) => {
+  const images = [];
+  const add = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach(add);
+      return;
+    }
+    const normalized = typeof value === "string" ? value.trim() : "";
+    if (normalized && !images.includes(normalized)) images.push(normalized);
+  };
+  values.forEach(add);
+  return images;
+};
+
+const collectVariantImageCandidates = (variants) => {
+  if (!Array.isArray(variants)) return [];
+  return variants.flatMap((variant) => [
+    ...(Array.isArray(variant?.images) ? variant.images : []),
+    variant?.image,
+  ]);
+};
+
 // --- Orders ---
 export const getUserOrders = async (req, res) => {
   try {
@@ -959,13 +981,11 @@ export const getUserOrders = async (req, res) => {
         ? order.items.map((item) => {
           const populated = item?.product;
           const fallback = fallbackProductMap.get(Number(item?.product_id || 0));
-          const variantImageFromFallback = Array.isArray(fallback?.variants) && fallback.variants.length
-            ? String(fallback.variants[0]?.image || "")
-            : "";
-          const productImageFromFallback = Array.isArray(fallback?.product_image)
-            ? String(fallback.product_image[0] || "")
-            : "";
-          const effectiveFallbackImage = productImageFromFallback || variantImageFromFallback;
+          const fallbackImageCandidates = collectProductImageCandidates(
+            fallback?.product_image,
+            collectVariantImageCandidates(fallback?.variants)
+          );
+          const effectiveFallbackImage = fallbackImageCandidates[0] || "";
           const variantPrice = Array.isArray(fallback?.variants) && fallback.variants.length
             ? Number(fallback.variants[0]?.selling_price || fallback.variants[0]?.price || 0)
             : 0;
@@ -974,21 +994,19 @@ export const getUserOrders = async (req, res) => {
 
           if (populated) {
             const productImages = Array.isArray(populated.product_image) ? populated.product_image : [];
-            const variantImageFromPopulated = Array.isArray(populated.variants) && populated.variants.length
-              ? String(populated.variants[0]?.image || "")
-              : "";
-            const normalizedImages = productImages.length
-              ? productImages
-              : (effectiveFallbackImage ? [effectiveFallbackImage] : (variantImageFromPopulated ? [variantImageFromPopulated] : []));
+            const normalizedImages = collectProductImageCandidates(
+              productImages,
+              collectVariantImageCandidates(populated.variants),
+              fallbackImageCandidates,
+              item?.product_image
+            );
             return {
               ...item,
               price: itemPrice > 0 ? itemPrice : Number(item?.price || 0),
               product: {
                 ...populated,
                 product_code: populated.product_code || fallback?.product_code || "",
-                product_image: normalizedImages.length
-                  ? normalizedImages
-                  : (item?.product_image ? [String(item.product_image)] : []),
+                product_image: normalizedImages,
               },
             };
           }
@@ -1005,9 +1023,7 @@ export const getUserOrders = async (req, res) => {
               name: fallback.name || fallback.title || "",
               title: fallback.title || fallback.name || "",
               product_code: fallback.product_code || "",
-              product_image: effectiveFallbackImage
-                ? [effectiveFallbackImage]
-                : (item?.product_image ? [String(item.product_image)] : []),
+              product_image: collectProductImageCandidates(fallbackImageCandidates, item?.product_image),
             },
           };
         })
@@ -1127,7 +1143,9 @@ export const createOrder = async (req, res) => {
         phone1: addressDoc?.phone1 || addressDoc?.phone || "",
         phone2: addressDoc?.phone2 || addressDoc?.alt_phone || "",
         address_line1: addressDoc?.address_line1 || addressDoc?.address || "",
+        address_line2: addressDoc?.address_line2 || "",
         city: addressDoc?.city || "",
+        district: addressDoc?.district || "",
         state: addressDoc?.state || "",
         country: addressDoc?.country || "",
         pinCode: addressDoc?.pinCode || addressDoc?.postal_code || "",
@@ -1317,7 +1335,9 @@ export const confirmPayment = async (req, res) => {
         phone1: addressDoc?.phone1 || addressDoc?.phone || "",
         phone2: addressDoc?.phone2 || addressDoc?.alt_phone || "",
         address_line1: addressDoc?.address_line1 || addressDoc?.address || "",
+        address_line2: addressDoc?.address_line2 || "",
         city: addressDoc?.city || "",
+        district: addressDoc?.district || "",
         state: addressDoc?.state || "",
         country: addressDoc?.country || "",
         pinCode: addressDoc?.pinCode || addressDoc?.postal_code || "",
@@ -1384,7 +1404,9 @@ export const updateUserAddress = async (req, res) => {
         phone: rest.phone1,
         alt_phone: rest.phone2,
         address_line1: rest.address,
+        address_line2: rest.address_line2 || "",
         city: rest.city,
+        district: rest.district || "",
         state: rest.state,
         postal_code: rest.pinCode,
         country: rest.country,
@@ -1409,8 +1431,10 @@ export const updateUserAddress = async (req, res) => {
       country: updated.country,
       state: updated.state,
       city: updated.city,
+      district: updated.district,
       pinCode: updated.pinCode,
       address: updated.address,
+      address_line2: updated.address_line2,
       addressType: updated.addressType,
     };
     return res.status(200).json({ status: true, address: shaped, data: shaped });
@@ -1442,6 +1466,7 @@ export const getUserAddresses = async (req, res) => {
       country: a.country || "",
       state: a.state || "",
       city: a.city || "",
+      district: a.district || "",
       pinCode: a.pinCode || a.postal_code || "",
       address: a.address || a.address_line1 || "",
       address_line2: a.address_line2 || "",
@@ -1475,6 +1500,7 @@ export const createNewAddress = async (req, res) => {
       address_line1: payload.address || "",
       address_line2: payload.address_line2 || "",
       city: payload.city,
+      district: payload.district || "",
       state: payload.state,
       postal_code: payload.pinCode,
       country: payload.country || "India",
@@ -1494,8 +1520,10 @@ export const createNewAddress = async (req, res) => {
       country: addr.country,
       state: addr.state,
       city: addr.city,
+      district: addr.district,
       pinCode: addr.pinCode,
       address: addr.address,
+      address_line2: addr.address_line2,
       addressType: addr.addressType,
     };
     return res
