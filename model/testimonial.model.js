@@ -11,5 +11,7 @@ const TestimonialSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+TestimonialSchema.index({ isActive: 1, order: 1, createdAt: -1 });
+
 const Testimonial = mongoose.model("Testimonial", TestimonialSchema);
 export default Testimonial;

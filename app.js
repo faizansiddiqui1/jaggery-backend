@@ -58,7 +58,12 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/health", (req, res) => {
-  res.status(200).json({ status: true, message: "Backend is running" });
+  res.status(200).json({
+    ok: true,
+    status: true,
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+  });
 });
 
 const startServer = async () => {

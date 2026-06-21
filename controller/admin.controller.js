@@ -270,6 +270,117 @@ const ensurePrimarySiteSettings = async () => {
   return doc;
 };
 
+const HOMEPAGE_CACHE_TTL_MS = 5 * 60 * 1000;
+let publicHomepageCache = null;
+
+const setPublicCacheHeaders = (res, maxAge = 300) => {
+  res.set("Cache-Control", `public, max-age=60, s-maxage=${maxAge}, stale-while-revalidate=86400`);
+};
+
+const shapePublicProductCard = (product) => {
+  const firstVariant = Array.isArray(product?.variants) ? product.variants[0] : null;
+  const variantImages = Array.isArray(firstVariant?.images) ? firstVariant.images.filter(Boolean) : [];
+  const productImages = Array.isArray(product?.product_image) ? product.product_image.filter(Boolean) : [];
+  const thumbnail = productImages[0] || firstVariant?.image || variantImages[0] || "";
+  const variants = Array.isArray(product?.variants)
+    ? product.variants.map((variant) => ({
+        label: String(variant?.label || ""),
+        stock: Math.max(0, Number(variant?.stock || 0)),
+        price: Number(variant?.price || 0),
+        originalPrice: Number(variant?.originalPrice || 0) || undefined,
+        image: String(variant?.image || ""),
+        images: Array.isArray(variant?.images) ? variant.images.filter(Boolean).slice(0, 4) : [],
+      }))
+    : [];
+
+  return {
+    product_id: product.product_id,
+    product_code: product.product_code || "",
+    name: product.name || product.title || "",
+    title: product.title || product.name || "",
+    description: product.description || "",
+    product_image: thumbnail ? [thumbnail] : [],
+    image: thumbnail,
+    price: Number(product.price || firstVariant?.originalPrice || firstVariant?.price || 0),
+    selling_price: Number(product.selling_price || firstVariant?.price || product.price || 0),
+    status: product.status,
+    catagory_id: product.catagory_id
+      ? { _id: product.catagory_id._id, name: product.catagory_id.name || "Shop" }
+      : undefined,
+    variants,
+    cod_available: product.cod_available === true,
+    quantity: variants.reduce((sum, variant) => sum + Number(variant.stock || 0), 0),
+  };
+};
+
+const getPublicHomepageData = async (_req, res) => {
+  const now = Date.now();
+  if (publicHomepageCache?.data && now - publicHomepageCache.savedAt < HOMEPAGE_CACHE_TTL_MS) {
+    setPublicCacheHeaders(res);
+    return res.status(200).json({ ...publicHomepageCache.data, cached: true });
+  }
+
+  const [bannersResult, productsResult, categoriesResult, testimonialsResult, settingsResult] =
+    await Promise.allSettled([
+      Banner.find({ isActive: true })
+        .select("title subtitle imageUrl targetUrl width height order isActive createdAt updatedAt")
+        .sort({ order: 1, createdAt: -1 })
+        .limit(10)
+        .lean(),
+      Products.find({})
+        .select("product_id product_code name title description product_image price selling_price status catagory_id variants cod_available")
+        .populate("catagory_id", "name")
+        .sort({ product_id: -1 })
+        .limit(12)
+        .lean(),
+      Catagories.find({})
+        .select("name parent")
+        .sort({ name: 1 })
+        .limit(50)
+        .lean(),
+      Testimonial.find({ isActive: true })
+        .select("quote name role order isActive createdAt updatedAt")
+        .sort({ order: 1, createdAt: -1 })
+        .limit(20)
+        .lean(),
+      ensurePrimarySiteSettings(),
+    ]);
+
+  const payload = {
+    status: true,
+    banners: bannersResult.status === "fulfilled" ? bannersResult.value : [],
+    featuredProducts:
+      productsResult.status === "fulfilled"
+        ? productsResult.value.map((product) => shapePublicProductCard(product))
+        : [],
+    categories:
+      categoriesResult.status === "fulfilled"
+        ? categoriesResult.value.map((category) => ({
+            id: String(category._id),
+            name: String(category.name || ""),
+            parent: category.parent ? String(category.parent) : null,
+          }))
+        : [],
+    testimonials:
+      testimonialsResult.status === "fulfilled"
+        ? testimonialsResult.value.map((row) => shapeTestimonial(row))
+        : [],
+    settings: settingsResult.status === "fulfilled" ? shapeSiteSettings(settingsResult.value) : null,
+    partial: [bannersResult, productsResult, categoriesResult, testimonialsResult, settingsResult].some(
+      (entry) => entry.status === "rejected"
+    ),
+  };
+
+  if (payload.partial && publicHomepageCache?.data) {
+    setPublicCacheHeaders(res);
+    return res.status(200).json({ ...publicHomepageCache.data, stale: true });
+  }
+
+  publicHomepageCache = { data: payload, savedAt: now };
+  setPublicCacheHeaders(res);
+  return res.status(200).json(payload);
+};
+
 const generateProductCode = async () => {
   for (let i = 0; i < 10; i += 1) {
     const candidate = createRandomAlphaNum(12);
@@ -3838,6 +3949,7 @@ export {
   getAnalyticsOverview,
   getSiteSettings,
   getPublicSiteSettings,
+  getPublicHomepageData,
   updateSiteSettings,
   uploadSiteLogo,
   createInstagramGalleryItem,

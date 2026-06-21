@@ -12,6 +12,7 @@ import {
   renameCategory,
   deleteCategory,
   getPublicSiteSettings,
+  getPublicHomepageData,
   getCustomersOverview,
   getSiteSettings,
   getCategoryTree,
@@ -46,6 +47,7 @@ import { adminLoginRateLimit } from "../middleware/rateLimit.middleware.js";
 const router = Router();
 
 router.post('/admin/login', adminLoginRateLimit, login);
+router.get('/admin/homepage/public', getPublicHomepageData);
 router.get('/admin/settings/public', getPublicSiteSettings);
 router.get('/admin/banners/public', getBannersPublic);
 router.get('/admin/testimonials/public', getTestimonialsPublic);

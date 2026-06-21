@@ -26,6 +26,7 @@ CatagorySchema.pre("save", function syncParentRefs() {
 // Create compound indexes for unique name per parent level.
 CatagorySchema.index({ name: 1, parent: 1 }, { unique: true });
 CatagorySchema.index({ name: 1, parentId: 1 }, { unique: true });
+CatagorySchema.index({ parent: 1, name: 1 });
 
 export const Catagories = mongoose.model("Catagories", CatagorySchema);
 export default Catagories;

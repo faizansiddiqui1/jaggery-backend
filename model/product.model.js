@@ -70,5 +70,8 @@ const ProductSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+ProductSchema.index({ status: 1, catagory_id: 1, product_id: -1 });
+ProductSchema.index({ catagory_id: 1, product_id: -1 });
+
 export const Products = mongoose.model("Products", ProductSchema);
 export default Products;
