@@ -1341,7 +1341,7 @@ const updateProduct = async (req, res) => {
         effectiveSellingPriceVal = hasSellingPrice ? parsedSellingPrice : Number(product.selling_price || 0);
       }
 
-      if (!effectiveName || !effectiveSku || !Number.isFinite(effectivePriceVal) || !Number.isFinite(effectiveSellingPriceVal) || !Number.isFinite(effectiveQuantityVal) || effectiveQuantityVal <= 0) {
+      if (!effectiveName || !effectiveSku || !Number.isFinite(effectivePriceVal) || !Number.isFinite(effectiveSellingPriceVal) || !Number.isFinite(effectiveQuantityVal) || effectiveQuantityVal < 0) {
         return res.status(400).json({
           status: false,
           message: "name, price, selling_price, quantity, sku are required to publish",
@@ -2002,7 +2002,7 @@ const updateDraft = async (req, res) => {
     draft.status = targetStatus;
 
     if (targetStatus === "published") {
-      if (!draft.name || !draft.price || !draft.selling_price || !draft.quantity || !draft.sku) {
+      if (!draft.name || !draft.price || !draft.selling_price || !Number.isFinite(Number(draft.quantity)) || Number(draft.quantity) < 0 || !draft.sku) {
         return res.status(400).json({
           status: false,
           message: "name, price, selling_price, quantity, sku are required to publish",
