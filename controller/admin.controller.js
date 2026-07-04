@@ -273,6 +273,10 @@ const ensurePrimarySiteSettings = async () => {
 const HOMEPAGE_CACHE_TTL_MS = 5 * 60 * 1000;
 let publicHomepageCache = null;
 
+const clearPublicHomepageCache = () => {
+  publicHomepageCache = null;
+};
+
 const setPublicCacheHeaders = (res, maxAge = 300) => {
   res.set("Cache-Control", `public, max-age=60, s-maxage=${maxAge}, stale-while-revalidate=86400`);
 };
@@ -3748,6 +3752,7 @@ const createTestimonial = async (req, res) => {
       order: Number(order) || 0,
       isActive: isActive !== false,
     });
+    clearPublicHomepageCache();
     res.status(201).json({ status: true, testimonial: shapeTestimonial(created) });
   } catch (error) {
     console.error("createTestimonial error:", error);
@@ -3772,6 +3777,7 @@ const updateTestimonial = async (req, res) => {
       return res.status(400).json({ status: false, message: "Quote and name are required." });
     }
     await existing.save();
+    clearPublicHomepageCache();
     res.status(200).json({ status: true, testimonial: shapeTestimonial(existing) });
   } catch (error) {
     console.error("updateTestimonial error:", error);
@@ -3784,6 +3790,7 @@ const deleteTestimonial = async (req, res) => {
     const { id } = req.params;
     const deleted = await Testimonial.findByIdAndDelete(id);
     if (!deleted) return res.status(404).json({ status: false, message: "Testimonial not found" });
+    clearPublicHomepageCache();
     res.status(200).json({ status: true, message: "Testimonial deleted" });
   } catch (error) {
     console.error("deleteTestimonial error:", error);
