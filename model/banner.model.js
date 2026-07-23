@@ -6,7 +6,7 @@ const BannerSchema = new mongoose.Schema(
     subtitle: { type: String, trim: true },
     imageUrl: { type: String, required: true, trim: true },
     imagePublicId: { type: String, default: "" },
-    targetUrl: { type: String, required: true, trim: true },
+    targetUrl: { type: String, default: "/shop", trim: true },
     width: { type: Number, default: 1200 },
     height: { type: Number, default: 675 },
     order: { type: Number, default: 0, index: true },

@@ -327,7 +327,7 @@ const getPublicHomepageData = async (_req, res) => {
   const [bannersResult, productsResult, categoriesResult, testimonialsResult, settingsResult] =
     await Promise.allSettled([
       Banner.find({ isActive: true })
-        .select("title subtitle imageUrl targetUrl width height order isActive createdAt updatedAt")
+        .select("imageUrl width height order isActive createdAt updatedAt")
         .sort({ order: 1, createdAt: -1 })
         .limit(10)
         .lean(),
@@ -3555,9 +3555,9 @@ const topProducts = async (_req, res) => {
 };
 
 // ---------- Banner carousel ----------
-const validateBannerPayload = ({ imageUrl, targetUrl, width, height }) => {
-  if (!imageUrl || !targetUrl) {
-    return "Image and target URL are required.";
+const validateBannerPayload = ({ imageUrl, width, height }) => {
+  if (!imageUrl) {
+    return "Banner image is required.";
   }
   const w = Number(width || 0);
   const h = Number(height || 0);
@@ -3569,7 +3569,7 @@ const validateBannerPayload = ({ imageUrl, targetUrl, width, height }) => {
 
 const createBanner = async (req, res) => {
   try {
-    const { imageUrl, targetUrl, title, subtitle, width, height, order = 0, isActive = true } = req.body;
+    const { imageUrl, title, subtitle, width, height, order = 0, isActive = true } = req.body;
 
     let resolvedImageUrl = imageUrl?.trim();
     let imagePublicId = "";
@@ -3586,7 +3586,6 @@ const createBanner = async (req, res) => {
 
     const validationError = validateBannerPayload({
       imageUrl: resolvedImageUrl,
-      targetUrl,
       width,
       height,
     });
@@ -3599,7 +3598,7 @@ const createBanner = async (req, res) => {
       subtitle: subtitle?.trim() || "",
       imageUrl: resolvedImageUrl.trim(),
       imagePublicId,
-      targetUrl: targetUrl.trim(),
+      targetUrl: "/shop",
       width: width ? Number(width) : 1200,
       height: height ? Number(height) : 675,
       order: Number(order) || 0,
@@ -3624,6 +3623,7 @@ const getBannersAdmin = async (_req, res) => {
 const getBannersPublic = async (_req, res) => {
   try {
     const banners = await Banner.find({ isActive: true })
+      .select("imageUrl width height order isActive createdAt updatedAt")
       .sort({ order: 1, createdAt: -1 })
       .limit(10);
     res.status(200).json({ status: true, banners });
@@ -3664,7 +3664,7 @@ const updateBanner = async (req, res) => {
       subtitle: payload.subtitle !== undefined ? payload.subtitle : existing.subtitle,
       imageUrl: newImageUrl,
       imagePublicId: newPublicId,
-      targetUrl: payload.targetUrl ? payload.targetUrl.trim() : existing.targetUrl,
+      targetUrl: payload.targetUrl ? payload.targetUrl.trim() : existing.targetUrl || "/shop",
       width: payload.width ? Number(payload.width) : existing.width || 1200,
       height: payload.height ? Number(payload.height) : existing.height || 675,
       order: payload.order != null ? Number(payload.order) : existing.order || 0,
