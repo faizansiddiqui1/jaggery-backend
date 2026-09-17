@@ -8,6 +8,9 @@ loadEnv();
 
 const otpStore = new Map(); // email -> { code, expires }
 const OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
+const OTP_MAX_VERIFY_ATTEMPTS = 3;
+const OTP_VERIFY_COOLDOWN_MS = 30 * 1000;
 
 const brevoApiKey = process.env.BREVO_API_KEY;
 const brevoFromEmail = process.env.BREVO_FROM_EMAIL;
@@ -16,7 +19,19 @@ const brevoFromName = process.env.BREVO_FROM_NAME || "Amila Gold";
 export const sendOtp = async (req, res) => {
   try {
     const { email } = req.body || {};
-    if (!email) return res.status(400).json({ message: "Email required" });
+    const normalizedEmail = String(email || "").trim().toLowerCase();
+    if (!normalizedEmail) return res.status(400).json({ message: "Email required" });
+
+    const existing = otpStore.get(normalizedEmail);
+    if (existing?.resendAfter && Date.now() < existing.resendAfter) {
+      const retryAfter = Math.ceil((existing.resendAfter - Date.now()) / 1000);
+      res.setHeader("Retry-After", String(Math.max(retryAfter, 1)));
+      return res.status(429).json({
+        status: false,
+        message: `Please wait ${Math.max(retryAfter, 1)} seconds before requesting another OTP`,
+        retryAfter: Math.max(retryAfter, 1),
+      });
+    }
 
     if (!brevoApiKey || !brevoFromEmail) {
       return res
@@ -26,7 +41,13 @@ export const sendOtp = async (req, res) => {
 
     const code = crypto.randomInt(100000, 999999).toString();
     const expires = Date.now() + OTP_TTL_MS;
-    otpStore.set(email, { code, expires });
+    otpStore.set(normalizedEmail, {
+      code,
+      expires,
+      resendAfter: Date.now() + OTP_RESEND_COOLDOWN_MS,
+      attempts: 0,
+      cooldownUntil: 0,
+    });
 
     const subject = "Your Amila Gold Login Code";
     const textContent = `Your OTP is ${code}. It expires in 10 minutes.`;
@@ -49,16 +70,20 @@ export const sendOtp = async (req, res) => {
         apiKey: brevoApiKey,
         fromEmail: brevoFromEmail,
         fromName: brevoFromName,
-        toEmail: email,
+        toEmail: normalizedEmail,
         subject,
         textContent,
         htmlContent,
       });
     } else {
-      console.log(`[EMAIL_DRY_RUN] OTP for ${email}: ${code}`);
+      console.log(`[EMAIL_DRY_RUN] OTP for ${normalizedEmail}: ${code}`);
     }
 
-    return res.status(200).json({ status: true, message: "OTP sent" });
+    return res.status(200).json({
+      status: true,
+      message: "OTP sent",
+      resendAfter: new Date(Date.now() + OTP_RESEND_COOLDOWN_MS).toISOString(),
+    });
   } catch (error) {
     console.error("sendOtp error:", error);
     return res
@@ -69,24 +94,51 @@ export const sendOtp = async (req, res) => {
 
 export const verifyOtp = async (req, res) => {
   const { email, otp } = req.body || {};
-  if (!email || !otp) {
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+  if (!normalizedEmail || !otp) {
     return res.status(400).json({ message: "Email and OTP required" });
   }
 
-  const entry = otpStore.get(email);
+  const entry = otpStore.get(normalizedEmail);
   if (!entry) return res.status(400).json({ message: "OTP expired or not found" });
   if (Date.now() > entry.expires) {
-    otpStore.delete(email);
+    otpStore.delete(normalizedEmail);
     return res.status(400).json({ message: "OTP expired" });
   }
+  if (entry.cooldownUntil && Date.now() < entry.cooldownUntil) {
+    const retryAfter = Math.ceil((entry.cooldownUntil - Date.now()) / 1000);
+    res.setHeader("Retry-After", String(Math.max(retryAfter, 1)));
+    return res.status(429).json({
+      status: false,
+      message: `Too many wrong OTP attempts. Try again in ${Math.max(retryAfter, 1)} seconds.`,
+      retryAfter: Math.max(retryAfter, 1),
+    });
+  }
   if (entry.code !== otp) {
-    return res.status(400).json({ message: "Invalid OTP" });
+    entry.attempts = Number(entry.attempts || 0) + 1;
+    if (entry.attempts >= OTP_MAX_VERIFY_ATTEMPTS) {
+      entry.attempts = 0;
+      entry.cooldownUntil = Date.now() + OTP_VERIFY_COOLDOWN_MS;
+      const retryAfter = Math.ceil(OTP_VERIFY_COOLDOWN_MS / 1000);
+      res.setHeader("Retry-After", String(retryAfter));
+      return res.status(429).json({
+        status: false,
+        message: `Too many wrong OTP attempts. Try again in ${retryAfter} seconds.`,
+        retryAfter,
+      });
+    }
+
+    return res.status(400).json({
+      status: false,
+      message: "Invalid OTP",
+      attemptsLeft: OTP_MAX_VERIFY_ATTEMPTS - entry.attempts,
+    });
   }
 
-  otpStore.delete(email);
+  otpStore.delete(normalizedEmail);
 
   // Find or create user profile
-  let profile = await Profile.findOne({ email: email.toLowerCase() });
+  let profile = await Profile.findOne({ email: normalizedEmail });
   if (profile?.isBlocked) {
     return res.status(403).json({
       status: false,
@@ -98,7 +150,7 @@ export const verifyOtp = async (req, res) => {
   const isNew = !profile;
 
   if (!profile) {
-    profile = new Profile({ email: email.toLowerCase(), name: "" });
+    profile = new Profile({ email: normalizedEmail, name: "" });
     await profile.save();
   }
 
@@ -108,7 +160,7 @@ export const verifyOtp = async (req, res) => {
   const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000);
   const session = new UserSession({
     session_id: token,
-    email: email.toLowerCase(),
+    email: normalizedEmail,
     expiresAt,
   });
   await session.save();
@@ -117,7 +169,8 @@ export const verifyOtp = async (req, res) => {
     status: true,
     message: "OTP verified",
     token,
-    email,
+    email: normalizedEmail,
+    expiresAt: expiresAt.toISOString(),
     isNew,
     profile: {
       email: profile.email,

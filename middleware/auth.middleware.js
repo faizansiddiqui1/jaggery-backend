@@ -83,6 +83,7 @@ export const requireUserSession = async (req, res, next) => {
     req.user = {
       email: String(session.email).toLowerCase(),
       sessionId: String(session.session_id || ""),
+      expiresAt: session.expiresAt || null,
     };
     next();
   } catch (error) {
@@ -90,4 +91,3 @@ export const requireUserSession = async (req, res, next) => {
     return res.status(500).json({ status: false, message: "Auth middleware failed" });
   }
 };
-

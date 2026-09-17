@@ -34,6 +34,8 @@ const OrdersSchema = new mongoose.Schema(
     country: { type: String },
     pinCode: { type: String },
     addressType: { type: String },
+    confirmationEmailSentAt: { type: Date, default: null },
+    confirmationEmailError: { type: String, default: "" },
     status_history: {
       type: [
         new mongoose.Schema(

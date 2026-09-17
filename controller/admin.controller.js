@@ -869,20 +869,21 @@ const uploadProduct = async (req, res) => {
 
     await newProduct.save();
 
-    // Notify subscribers (fire and forget - doesn't return promise)
-    try {
-      const result = notifySubscribersProductUploaded(newProduct.toObject());
-      if (result && typeof result.then === 'function') {
-        result.then((res) => {
-          if (res?.total) {
-            console.log("product upload campaign:", res);
-          }
-        }).catch((err) => {
-          console.error("notifySubscribersProductUploaded error:", err?.message || err);
-        });
+    if (String(newProduct.status || "").toLowerCase() === "published") {
+      try {
+        const result = notifySubscribersProductUploaded(newProduct.toObject());
+        if (result && typeof result.then === 'function') {
+          result.then((res) => {
+            if (res?.total) {
+              console.log("product upload campaign:", res);
+            }
+          }).catch((err) => {
+            console.error("notifySubscribersProductUploaded error:", err?.message || err);
+          });
+        }
+      } catch (err) {
+        console.error("notifySubscribersProductUploaded error:", err?.message || err);
       }
-    } catch (err) {
-      console.error("notifySubscribersProductUploaded error:", err?.message || err);
     }
 
     res.status(201).json({
@@ -1541,8 +1542,10 @@ const updateProduct = async (req, res) => {
     }
 
     const currentQuantity = Number(product.quantity || 0);
+    let subscriberStockUpdateQueued = false;
     if (previousQuantity <= 0 && currentQuantity > 0) {
       safeFireAndForget(() => notifySubscribersProductInStock(product.toObject()), "notifySubscribersProductInStock");
+      subscriberStockUpdateQueued = true;
     }
 
     const currentVariantStockMap = buildVariantStockMap(product.toObject());
@@ -1564,6 +1567,11 @@ const updateProduct = async (req, res) => {
             color: colorKey,
             size: sizeKey,
           }), "notifyProductWaitlistForVariant");
+
+          if (!subscriberStockUpdateQueued) {
+            safeFireAndForget(() => notifySubscribersProductInStock(product.toObject()), "notifySubscribersProductInStock");
+            subscriberStockUpdateQueued = true;
+          }
         }
 
         if (before > 0 && after <= 0) {

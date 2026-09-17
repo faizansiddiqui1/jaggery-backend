@@ -11,6 +11,10 @@ import Cart from "../model/cart.model.js";
 import NewsletterSubscriber from "../model/newsletterSubscriber.model.js";
 import ContactSubmission from "../model/contactSubmission.model.js";
 import { notifyOrderConfirmed, processOrderReminderJob } from "../services/waspWhatsApp.service.js";
+import {
+  sendNewsletterWelcomeEmail,
+  sendOrderConfirmationEmail,
+} from "../utils/subscriberNotifications.js";
 
 const parsePageLimit = (req) => {
   const page = Math.max(parseInt(req.query.page || "1", 10), 1);
@@ -649,7 +653,11 @@ export const getUserProfile = async (req, res) => {
     try {
       if (profile && typeof profile === 'object' && 'age' in profile) delete profile.age;
     } catch (e) {}
-    return res.status(200).json({ status: true, profile });
+    return res.status(200).json({
+      status: true,
+      profile,
+      expiresAt: req.user?.expiresAt ? new Date(req.user.expiresAt).toISOString() : null,
+    });
   } catch (error) {
     console.error("getUserProfile error:", error);
     return res
@@ -793,23 +801,41 @@ export const subscribeNewsletter = async (req, res) => {
       return res.status(400).json({ status: false, message: "Valid email required" });
     }
 
-    const subscriber = await NewsletterSubscriber.findOneAndUpdate(
-      { email },
-      {
-        $set: {
-          email,
-          source,
-          isActive: true,
-          subscribedAt: new Date(),
-        },
-      },
-      { new: true, upsert: true, setDefaultsOnInsert: true }
-    ).lean();
+    const existingSubscriber = await NewsletterSubscriber.findOne({ email });
+    const alreadySubscribed = Boolean(existingSubscriber?.isActive);
+    const shouldSendWelcomeEmail = !alreadySubscribed;
+    let subscriber;
+
+    if (existingSubscriber) {
+      existingSubscriber.source = source;
+      existingSubscriber.isActive = true;
+      if (!existingSubscriber.subscribedAt) {
+        existingSubscriber.subscribedAt = new Date();
+      }
+      subscriber = await existingSubscriber.save();
+    } else {
+      subscriber = await NewsletterSubscriber.create({
+        email,
+        source,
+        isActive: true,
+        subscribedAt: new Date(),
+      });
+    }
+
+    if (shouldSendWelcomeEmail) {
+      sendNewsletterWelcomeEmail(email).catch((emailError) => {
+        console.error("sendNewsletterWelcomeEmail error:", emailError?.message || emailError);
+      });
+    }
 
     return res.status(200).json({
       status: true,
-      message: "Subscribed successfully",
-      subscriber,
+      message: alreadySubscribed
+        ? "You are already subscribed. We will keep you posted."
+        : "Subscribed successfully. Please check your inbox.",
+      alreadySubscribed,
+      emailSent: shouldSendWelcomeEmail,
+      subscriber: typeof subscriber.toObject === "function" ? subscriber.toObject() : subscriber,
     });
   } catch (error) {
     console.error("subscribeNewsletter error:", error);
@@ -909,6 +935,31 @@ const getOrderNotificationProfile = async (order) => {
     profileName: String(profile?.name || "").trim(),
     profilePhone: String(profile?.phone || "").trim(),
   };
+};
+
+const queueOrderConfirmationEmail = (order) => {
+  const orderId = order?._id;
+  const email = String(order?.user_email || "").trim().toLowerCase();
+  if (!orderId || !email || order?.confirmationEmailSentAt) return;
+
+  const orderPayload = typeof order.toObject === "function" ? order.toObject() : order;
+  sendOrderConfirmationEmail(orderPayload)
+    .then((result) => {
+      if (result?.skipped) return;
+      return Orders.updateOne(
+        { _id: orderId, confirmationEmailSentAt: null },
+        { $set: { confirmationEmailSentAt: new Date(), confirmationEmailError: "" } }
+      );
+    })
+    .catch((error) => {
+      console.error("sendOrderConfirmationEmail error:", error?.message || error);
+      return Orders.updateOne(
+        { _id: orderId },
+        { $set: { confirmationEmailError: String(error?.message || error).slice(0, 500) } }
+      ).catch((updateError) => {
+        console.error("confirmationEmailError update failed:", updateError?.message || updateError);
+      });
+    });
 };
 
 const isValidUpiId = (value) => /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/.test(String(value || "").trim());
@@ -1171,6 +1222,7 @@ export const createOrder = async (req, res) => {
       }
 
       notifyOrderConfirmed(order, await getOrderNotificationProfile(order));
+      queueOrderConfirmationEmail(order);
 
       return res.status(200).json({
         status: true,
@@ -1377,6 +1429,9 @@ export const confirmPayment = async (req, res) => {
 
     if (shouldNotifyOrderConfirmed) {
       notifyOrderConfirmed(order, await getOrderNotificationProfile(order));
+    }
+    if (shouldNotifyOrderConfirmed || !order?.confirmationEmailSentAt) {
+      queueOrderConfirmationEmail(order);
     }
 
     return res.status(200).json({ status: true, message: "Payment verified", order_id: order?.order_id });
